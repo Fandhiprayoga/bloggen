@@ -6,6 +6,7 @@ use App\Libraries\Contracts\ContentGeneratorInterface;
 use CodeIgniter\HTTP\CURLRequest;
 use Config\ContentPipeline;
 use Psr\Log\LoggerInterface;
+use RuntimeException;
 use Throwable;
 
 class OllamaContentGeneratorService implements ContentGeneratorInterface
@@ -20,6 +21,7 @@ class OllamaContentGeneratorService implements ContentGeneratorInterface
     public function generate(array $payload): array
     {
         $baseUrl = $this->config->ollamaBaseUrl;
+        $httpTimeout = $this->resolveHttpTimeout();
         if ($baseUrl === '') {
             return [
                 'success' => false,
@@ -50,11 +52,16 @@ class OllamaContentGeneratorService implements ContentGeneratorInterface
 
             $requestPayload = [
                 'model' => $model,
-                'stream' => false,
+                'stream' => true,
+                'format' => 'json',
+                'options' => [
+                    'temperature' => 0,
+                    'num_predict' => 4096,
+                ],
                 'messages' => [
                     [
                         'role' => 'system',
-                        'content' => 'Kamu adalah penulis konten SEO expert. Jawab dalam JSON valid saja tanpa teks tambahan.',
+                        'content' => 'Kamu adalah penulis konten SEO expert berbahasa Indonesia. Jawab HANYA dengan valid JSON tanpa teks tambahan di awal atau akhir.',
                     ],
                     [
                         'role' => 'user',
@@ -63,27 +70,44 @@ class OllamaContentGeneratorService implements ContentGeneratorInterface
                 ],
             ];
 
-            $response = $this->http->post(rtrim($baseUrl, '/') . '/api/chat', [
-                'timeout' => $this->config->requestTimeout,
-                'headers' => [
-                    'Content-Type' => 'application/json',
-                ],
-                'body' => json_encode($requestPayload, JSON_UNESCAPED_UNICODE),
-            ]);
+            $onChunk = $payload['on_chunk'] ?? null;
+            $rawBody = '';
+            $statusCode = 0;
 
-            if ($response->getStatusCode() < 200 || $response->getStatusCode() >= 300) {
-                $snippet = mb_substr($response->getBody(), 0, 300);
+            if (is_callable($onChunk)) {
+                $streamResult = $this->postStreamWithNativeCurl(
+                    rtrim($baseUrl, '/') . '/api/chat',
+                    $requestPayload,
+                    $httpTimeout,
+                    $onChunk,
+                );
+                $rawBody = $streamResult['body'];
+                $statusCode = $streamResult['status_code'];
+            } else {
+                $response = $this->http->post(rtrim($baseUrl, '/') . '/api/chat', [
+                    'timeout' => $httpTimeout,
+                    'connect_timeout' => min(10, $httpTimeout),
+                    'headers' => [
+                        'Content-Type' => 'application/json',
+                    ],
+                    'body' => json_encode($requestPayload, JSON_UNESCAPED_UNICODE),
+                ]);
+                $rawBody = (string) $response->getBody();
+                $statusCode = (int) $response->getStatusCode();
+            }
+
+            if ($statusCode < 200 || $statusCode >= 300) {
+                $snippet = mb_substr($rawBody, 0, 300);
 
                 return [
                     'success' => false,
                     'article' => null,
                     'error_code' => 'OLLAMA_HTTP_ERROR',
-                    'error_message' => 'Ollama request gagal dengan status ' . $response->getStatusCode() . '. ' . $snippet,
+                    'error_message' => 'Ollama request gagal dengan status ' . $statusCode . '. ' . $snippet,
                 ];
             }
 
-            $decoded = json_decode($response->getBody(), true);
-            $content = $decoded['message']['content'] ?? null;
+            $content = $this->extractResponseContent($rawBody);
 
             if (! is_string($content) || trim($content) === '') {
                 return [
@@ -96,11 +120,16 @@ class OllamaContentGeneratorService implements ContentGeneratorInterface
 
             $articleData = $this->parseJsonPayload($content);
             if ($articleData === null) {
+                $this->logger->error('Ollama JSON parsing failed', [
+                    'raw_content' => mb_substr($content, 0, 500),
+                    'content_length' => strlen($content),
+                ]);
+
                 return [
                     'success' => false,
                     'article' => null,
                     'error_code' => 'OLLAMA_INVALID_JSON',
-                    'error_message' => 'Format output Ollama tidak valid JSON.',
+                    'error_message' => 'Format output Ollama tidak valid JSON. Response: ' . mb_substr($content, 0, 200),
                 ];
             }
 
@@ -111,7 +140,11 @@ class OllamaContentGeneratorService implements ContentGeneratorInterface
                 'error_message' => null,
             ];
         } catch (Throwable $e) {
-            $this->logger->error('Ollama generation failed.', ['message' => $e->getMessage()]);
+            $this->logger->error('Ollama generation failed.', [
+                'message' => $e->getMessage(),
+                'effective_timeout' => $httpTimeout,
+                'configured_timeout' => $this->config->requestTimeout,
+            ]);
 
             return [
                 'success' => false,
@@ -120,6 +153,22 @@ class OllamaContentGeneratorService implements ContentGeneratorInterface
                 'error_message' => 'Terjadi error saat memanggil Ollama: ' . $e->getMessage(),
             ];
         }
+    }
+
+    private function resolveHttpTimeout(): int
+    {
+        $configuredTimeout = max(5, (int) $this->config->requestTimeout);
+        $maxExecution = (int) ini_get('max_execution_time');
+
+        // max_execution_time = 0 means unlimited; keep configured timeout in that case.
+        if ($maxExecution <= 0) {
+            return $configuredTimeout;
+        }
+
+        // Keep a safety buffer so cURL timeout happens before PHP kills the request.
+        $safeLimit = max(5, $maxExecution - 15);
+
+        return min($configuredTimeout, $safeLimit);
     }
 
     private function buildPrompt(array $payload): string
@@ -132,31 +181,266 @@ class OllamaContentGeneratorService implements ContentGeneratorInterface
         $tone = (string) ($payload['tone'] ?? 'santai-edukatif');
         $wordTarget = (string) ($payload['word_target'] ?? '1200-1800');
 
-        return "Buat artikel blog SEO-friendly berbahasa Indonesia.\n"
-            . "Gaya artikel: {$articleStyle}.\n"
-            . "Tone penulisan: {$tone}.\n"
-            . "Panjang target {$wordTarget} kata.\n"
-            . "Gunakan struktur H1-H3, sertakan FAQ.\n"
-            . "Kembalikan JSON dengan field:"
-            . " title, body_html, body_markdown, word_count, language, tone, primary_keyword, secondary_keywords (array), seo_title, seo_meta_description, seo_slug, faq (array berisi question+answer), seo_score.\n"
+        return "Kamu adalah penulis konten SEO expert bahasa Indonesia. PENTING: Jawab HANYA dengan JSON valid, tanpa kata-kata tambahan di awal atau akhir.\n\n"
+            . "Buat artikel blog SEO-friendly berbahasa Indonesia.\n"
+            . "- Gaya artikel: {$articleStyle}\n"
+            . "- Tone penulisan: {$tone}\n"
+            . "- Panjang target {$wordTarget} kata\n"
+            . "- Gunakan struktur H1-H3, sertakan FAQ\n\n"
+            . "ATURAN SUMBER VIDEO (WAJIB):\n"
+            . "- Jika context berasal dari ringkasan/transkrip video, gunakan hanya sebagai riset internal.\n"
+            . "- DILARANG menyebut video, channel, YouTube, narasumber video, adegan video, atau timestamp/timecode (contoh: 00:10).\n"
+            . "- Tulis artikel baru yang sepenuhnya mandiri dan tidak bergantung pada video sumber.\n\n"
+            . "WAJIB RETURN EXACT JSON STRUCTURE:\n"
+            . "{\n"
+            . "  \"title\": \"...\",\n"
+            . "  \"body_html\": \"...\",\n"
+            . "  \"body_markdown\": \"...\",\n"
+            . "  \"word_count\": 1200,\n"
+            . "  \"language\": \"id\",\n"
+            . "  \"tone\": \"{$tone}\",\n"
+            . "  \"primary_keyword\": \"...\",\n"
+            . "  \"secondary_keywords\": [\"...\"],\n"
+            . "  \"seo_title\": \"...\",\n"
+            . "  \"seo_meta_description\": \"...\",\n"
+            . "  \"seo_slug\": \"...\",\n"
+            . "  \"faq\": [{\"question\": \"...\", \"answer\": \"...\"}],\n"
+            . "  \"seo_score\": 85\n"
+            . "}\n\n"
             . "Context title: {$title}\n"
             . "Context description: {$description}\n"
             . "Prompt user:\n{$promptText}\n"
             . "Transcript (jika tersedia):\n{$transcript}";
     }
 
+    private function extractResponseContent(string $rawBody): ?string
+    {
+        $trimmed = trim($rawBody);
+        if ($trimmed === '') {
+            return null;
+        }
+
+        // Non-stream fallback: single JSON object response.
+        $decoded = json_decode($trimmed, true);
+        $singleContent = $decoded['message']['content'] ?? null;
+        if (is_string($singleContent) && trim($singleContent) !== '') {
+            return $singleContent;
+        }
+
+        // Stream response from Ollama is newline-delimited JSON (NDJSON).
+        $parts = preg_split('/\R+/', $trimmed) ?: [];
+        $chunks = [];
+        foreach ($parts as $part) {
+            $line = trim((string) $part);
+            if ($line === '') {
+                continue;
+            }
+
+            $item = json_decode($line, true);
+            if (! is_array($item)) {
+                continue;
+            }
+
+            $piece = $item['message']['content'] ?? null;
+            if (is_string($piece) && $piece !== '') {
+                $chunks[] = $piece;
+            }
+        }
+
+        if ($chunks === []) {
+            return null;
+        }
+
+        return implode('', $chunks);
+    }
+
+    /**
+     * @param callable(string):bool|void $onChunk Return false to stop stream early.
+     * @return array{status_code:int,body:string}
+     */
+    private function postStreamWithNativeCurl(string $url, array $requestPayload, int $httpTimeout, callable $onChunk): array
+    {
+        $ch = curl_init($url);
+        if ($ch === false) {
+            throw new RuntimeException('Gagal inisialisasi cURL.');
+        }
+
+        $body = '';
+        $lineBuffer = '';
+
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+            CURLOPT_POSTFIELDS => json_encode($requestPayload, JSON_UNESCAPED_UNICODE),
+            CURLOPT_RETURNTRANSFER => false,
+            CURLOPT_TIMEOUT => $httpTimeout,
+            CURLOPT_CONNECTTIMEOUT => min(10, $httpTimeout),
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_WRITEFUNCTION => static function ($curlHandle, string $chunk) use (&$body, &$lineBuffer, $onChunk): int {
+                $body .= $chunk;
+                $lineBuffer .= $chunk;
+
+                while (($pos = strpos($lineBuffer, "\n")) !== false) {
+                    $line = trim(substr($lineBuffer, 0, $pos));
+                    $lineBuffer = substr($lineBuffer, $pos + 1);
+
+                    if ($line === '') {
+                        continue;
+                    }
+
+                    $decoded = json_decode($line, true);
+                    $piece = $decoded['message']['content'] ?? null;
+                    if (is_string($piece) && $piece !== '') {
+                        $result = $onChunk($piece);
+                        if ($result === false) {
+                            return 0;
+                        }
+                    }
+                }
+
+                return strlen($chunk);
+            },
+        ]);
+
+        $ok = curl_exec($ch);
+
+        if ($lineBuffer !== '') {
+            $decoded = json_decode(trim($lineBuffer), true);
+            $piece = $decoded['message']['content'] ?? null;
+            if (is_string($piece) && $piece !== '') {
+                $result = $onChunk($piece);
+                if ($result === false) {
+                    curl_close($ch);
+
+                    return [
+                        'status_code' => 499,
+                        'body' => $body,
+                    ];
+                }
+            }
+        }
+
+        if ($ok === false) {
+            $message = curl_error($ch);
+            curl_close($ch);
+
+            throw new RuntimeException('cURL stream error: ' . $message);
+        }
+
+        $statusCode = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        curl_close($ch);
+
+        return [
+            'status_code' => $statusCode,
+            'body' => $body,
+        ];
+    }
+
     private function parseJsonPayload(string $content): ?array
     {
         $trimmed = trim($content);
-        $decoded = json_decode($trimmed, true);
-        if (is_array($decoded)) {
-            return $decoded;
+        if ($trimmed === '') {
+            return null;
         }
 
-        if (preg_match('/\{(?:.|\R)*\}/u', $trimmed, $matches) === 1) {
-            $decoded = json_decode($matches[0], true);
+        $candidates = [];
+        $candidates[] = $trimmed;
 
-            return is_array($decoded) ? $decoded : null;
+        $withoutFence = $this->stripCodeFence($trimmed);
+        if ($withoutFence !== $trimmed) {
+            $candidates[] = $withoutFence;
+        }
+
+        $extracted = $this->extractFirstJsonObject($trimmed);
+        if ($extracted !== null) {
+            $candidates[] = $extracted;
+        }
+
+        if ($withoutFence !== '') {
+            $extractedFromFence = $this->extractFirstJsonObject($withoutFence);
+            if ($extractedFromFence !== null) {
+                $candidates[] = $extractedFromFence;
+            }
+        }
+
+        foreach ($candidates as $candidate) {
+            $decoded = json_decode($candidate, true);
+            if (is_array($decoded)) {
+                return $decoded;
+            }
+        }
+
+        return null;
+    }
+
+    private function stripCodeFence(string $content): string
+    {
+        $trimmed = trim($content);
+
+        if (preg_match('/^```(?:json)?\s*(.*?)\s*```$/is', $trimmed, $matches) === 1) {
+            return trim((string) ($matches[1] ?? ''));
+        }
+
+        if (preg_match('/```(?:json)?\s*(\{[\s\S]*\})\s*```/i', $trimmed, $matches) === 1) {
+            return trim((string) ($matches[1] ?? ''));
+        }
+
+        // Fallback: remove opening/closing fences even when format is malformed.
+        $withoutOpenFence = preg_replace('/^```(?:json)?\s*/i', '', $trimmed) ?? $trimmed;
+        $withoutAnyFence = preg_replace('/\s*```\s*$/', '', $withoutOpenFence) ?? $withoutOpenFence;
+
+        return trim($withoutAnyFence);
+    }
+
+    private function extractFirstJsonObject(string $content): ?string
+    {
+        $start = strpos($content, '{');
+        if ($start === false) {
+            return null;
+        }
+
+        $depth = 0;
+        $inString = false;
+        $escaped = false;
+        $length = strlen($content);
+
+        for ($i = $start; $i < $length; $i++) {
+            $ch = $content[$i];
+
+            if ($inString) {
+                if ($escaped) {
+                    $escaped = false;
+                    continue;
+                }
+
+                if ($ch === '\\') {
+                    $escaped = true;
+                    continue;
+                }
+
+                if ($ch === '"') {
+                    $inString = false;
+                }
+
+                continue;
+            }
+
+            if ($ch === '"') {
+                $inString = true;
+                continue;
+            }
+
+            if ($ch === '{') {
+                $depth++;
+                continue;
+            }
+
+            if ($ch === '}') {
+                $depth--;
+                if ($depth === 0) {
+                    return substr($content, $start, ($i - $start) + 1);
+                }
+            }
         }
 
         return null;

@@ -9,7 +9,7 @@
         <h4>Generate Dari Prompt</h4>
       </div>
       <div class="card-body">
-        <form action="<?= base_url('admin/content/generate') ?>" method="post">
+        <form id="generate-content-form" action="<?= base_url('admin/content/generate') ?>" method="post">
           <?= csrf_field() ?>
           <div class="form-group">
             <label for="prompt_text">Prompt Konten</label>
@@ -88,10 +88,30 @@
             </div>
           </div>
 
-          <button type="submit" class="btn btn-primary">
+          <button type="submit" id="btn-generate-content" class="btn btn-primary">
             <i class="fas fa-magic mr-1"></i> Generate Konten
           </button>
+          <button type="button" id="btn-stop-generate" class="btn btn-outline-danger ml-2" style="display:none;">
+            <i class="fas fa-stop-circle mr-1"></i> Stop
+          </button>
         </form>
+
+        <div id="generate-progress-panel" class="alert alert-light border mt-3 mb-0" style="display:none;">
+          <div class="d-flex align-items-center mb-2">
+            <div class="spinner-border spinner-border-sm text-primary mr-2" role="status" aria-hidden="true"></div>
+            <strong id="generate-progress-title">Memproses generate konten...</strong>
+          </div>
+          <ul id="generate-progress-log" class="mb-0 pl-3"></ul>
+        </div>
+
+        <div id="generate-live-panel" class="card border mt-3" style="display:none;">
+          <div class="card-header py-2">
+            <h6 class="mb-0">Streaming Konten (Realtime)</h6>
+          </div>
+          <div class="card-body py-2">
+            <div id="generate-live-content" class="mb-0" style="max-height:320px; overflow:auto;"></div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -179,6 +199,122 @@
   const btnCheck = document.getElementById('btn-check-ollama');
   const resultSpan = document.getElementById('ollama-check-result');
   const checkUrl = '<?= base_url('admin/content/check-ollama') ?>';
+  const streamUrl = '<?= base_url('admin/content/generate-stream') ?>';
+  const generateForm = document.getElementById('generate-content-form');
+  const generateButton = document.getElementById('btn-generate-content');
+  const stopButton = document.getElementById('btn-stop-generate');
+  const progressPanel = document.getElementById('generate-progress-panel');
+  const progressTitle = document.getElementById('generate-progress-title');
+  const progressLog = document.getElementById('generate-progress-log');
+  const livePanel = document.getElementById('generate-live-panel');
+  const liveContent = document.getElementById('generate-live-content');
+  let activeAbortController = null;
+  let liveBuffer = '';
+
+  function appendProgress(message, cssClass) {
+    const li = document.createElement('li');
+      li.textContent = message;
+    if (cssClass) {
+      li.className = cssClass;
+    }
+    progressLog.appendChild(li);
+  }
+
+  function setGeneratingState(isGenerating) {
+    generateButton.disabled = isGenerating;
+    stopButton.style.display = isGenerating ? 'inline-block' : 'none';
+    stopButton.disabled = !isGenerating;
+    if (isGenerating) {
+      generateButton.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Generating...';
+      progressPanel.style.display = 'block';
+      progressLog.innerHTML = '';
+      progressTitle.textContent = 'Memproses generate konten...';
+      livePanel.style.display = 'none';
+      liveContent.innerHTML = '';
+      liveBuffer = '';
+    } else {
+      generateButton.innerHTML = '<i class="fas fa-magic mr-1"></i> Generate Konten';
+      activeAbortController = null;
+    }
+  }
+
+  function escapeHtml(input) {
+    return input
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function markdownToHtml(markdown) {
+    let html = escapeHtml(markdown || '');
+
+    html = html.replace(/^###\s+(.*)$/gm, '<h6>$1</h6>');
+    html = html.replace(/^##\s+(.*)$/gm, '<h5>$1</h5>');
+    html = html.replace(/^#\s+(.*)$/gm, '<h4>$1</h4>');
+    html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    html = html.replace(/^\-\s+(.*)$/gm, '<li>$1</li>');
+    html = html.replace(/(<li>.*<\/li>)/gs, '<ul>$1</ul>');
+    html = html.replace(/\n\n+/g, '</p><p>');
+    html = html.replace(/\n/g, '<br>');
+
+    return '<p>' + html + '</p>';
+  }
+
+  function extractBodyMarkdown(rawJsonLikeText) {
+    const match = rawJsonLikeText.match(/"body_markdown"\s*:\s*"((?:\\.|[^"\\])*)"/s);
+    if (!match || !match[1]) {
+      return null;
+    }
+
+    try {
+      const wrapped = '{"value":"' + match[1].replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"}';
+      return JSON.parse(wrapped).value;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function appendLiveChunk(text) {
+    if (!text) {
+      return;
+    }
+
+    liveBuffer += text;
+    livePanel.style.display = 'block';
+
+    const extractedMarkdown = extractBodyMarkdown(liveBuffer);
+    if (extractedMarkdown) {
+      liveContent.innerHTML = markdownToHtml(extractedMarkdown);
+    } else {
+      liveContent.innerHTML = '<p class="text-muted mb-0">Menyusun preview markdown...</p>';
+    }
+
+    liveContent.scrollTop = liveContent.scrollHeight;
+  }
+
+  function parseSseChunk(chunk) {
+    const blocks = chunk.split('\n\n');
+    return blocks
+      .map(function (block) {
+        const lines = block.split('\n');
+        let eventName = 'message';
+        let data = '';
+        lines.forEach(function (line) {
+          if (line.startsWith('event:')) {
+            eventName = line.slice(6).trim();
+          }
+          if (line.startsWith('data:')) {
+            data += line.slice(5).trim();
+          }
+        });
+        return { event: eventName, data: data };
+      })
+      .filter(function (x) { return x.data !== ''; });
+  }
 
   function toggleSection() {
     const isOllama = providerSelect.value === 'ollama';
@@ -227,6 +363,105 @@
       .finally(function () {
         btnCheck.disabled = false;
       });
+  });
+
+  generateForm.addEventListener('submit', function (event) {
+    event.preventDefault();
+    setGeneratingState(true);
+    appendProgress('Mengirim permintaan generate ke server...', 'text-muted');
+    activeAbortController = new window.AbortController();
+
+    fetch(streamUrl, {
+      method: 'POST',
+      headers: {
+        Accept: 'text/event-stream',
+        'X-Requested-With': 'XMLHttpRequest'
+      },
+      body: new window.FormData(generateForm),
+      signal: activeAbortController.signal
+    })
+      .then(function (response) {
+        if (!response.ok || !response.body) {
+          throw new Error('HTTP ' + response.status + ' ' + response.statusText);
+        }
+
+        const reader = response.body.getReader();
+          const decoder = new window.TextDecoder('utf-8');
+        let buffer = '';
+
+        function pump() {
+          return reader.read().then(function (result) {
+            if (result.done) {
+              return;
+            }
+
+            buffer += decoder.decode(result.value, { stream: true });
+            const segments = buffer.split('\n\n');
+            buffer = segments.pop() || '';
+
+            segments.forEach(function (segment) {
+              parseSseChunk(segment + '\n\n').forEach(function (payload) {
+                let data = {};
+                try {
+                  data = JSON.parse(payload.data);
+                } catch (e) {
+                  return;
+                }
+
+                if (payload.event === 'progress') {
+                  appendProgress(data.message || 'Progress update...', 'text-muted');
+                } else if (payload.event === 'content_chunk') {
+                  appendLiveChunk(data.chunk || '');
+                } else if (payload.event === 'error') {
+                  progressTitle.textContent = 'Generate gagal';
+                  appendProgress(data.message || 'Terjadi error.', 'text-danger');
+                  setGeneratingState(false);
+                } else if (payload.event === 'complete') {
+                  progressTitle.textContent = 'Generate selesai';
+                  appendProgress(data.message || 'Selesai.', 'text-success');
+                  if (data.redirect_url) {
+                    window.location.href = data.redirect_url;
+                  } else {
+                    setGeneratingState(false);
+                  }
+                } else if (payload.event === 'done') {
+                  if (!data.success) {
+                    setGeneratingState(false);
+                  }
+                }
+              });
+            });
+
+            return pump();
+          });
+        }
+
+        return pump();
+      })
+      .catch(function (error) {
+        if (error && error.name === 'AbortError') {
+          progressTitle.textContent = 'Generate dibatalkan';
+          appendProgress('Proses generate dibatalkan oleh user.', 'text-warning');
+          return;
+        }
+
+        progressTitle.textContent = 'Generate gagal';
+        appendProgress('Gagal membaca stream: ' + error.message, 'text-danger');
+        setGeneratingState(false);
+      })
+      .finally(function () {
+        setGeneratingState(false);
+      });
+  });
+
+  stopButton.addEventListener('click', function () {
+    if (!activeAbortController) {
+      return;
+    }
+
+    stopButton.disabled = true;
+    appendProgress('Memutus stream generate...', 'text-warning');
+    activeAbortController.abort();
   });
 })();
 </script>

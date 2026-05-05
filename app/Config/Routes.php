@@ -72,6 +72,7 @@ $routes->group('', ['filter' => 'session'], static function ($routes) {
         $routes->group('content', static function ($routes) {
             $routes->get('/', 'ContentController::index', ['filter' => 'permission:content.generate']);
             $routes->post('generate', 'ContentController::generate', ['filter' => 'permission:content.generate']);
+            $routes->post('generate-stream', 'ContentController::generateStream', ['filter' => 'permission:content.generate']);
             $routes->get('history', 'ContentController::history', ['filter' => 'permission:content.view_history']);
             $routes->get('detail/(:segment)', 'ContentController::detail/$1', ['filter' => 'permission:content.view_history']);
             $routes->post('publish/(:segment)', 'ContentController::publish/$1', ['filter' => 'permission:content.submit_wp']);

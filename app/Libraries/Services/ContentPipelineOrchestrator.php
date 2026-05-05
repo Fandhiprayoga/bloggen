@@ -24,7 +24,7 @@ class ContentPipelineOrchestrator
     ) {
     }
 
-    public function runPromptGeneration(string $promptText, ?int $userId, array $options = []): array
+    public function runPromptGeneration(string $promptText, ?int $userId, array $options = [], ?callable $progress = null): array
     {
         $jobId = $this->uuidV4();
         $pseudoVideoId = substr(hash('sha256', $promptText), 0, 11);
@@ -33,6 +33,7 @@ class ContentPipelineOrchestrator
         $tone = (string) ($options['tone'] ?? 'santai-edukatif');
         $aiProvider = (string) ($options['ai_provider'] ?? 'openai');
         $ollamaModel = (string) ($options['ollama_model'] ?? '');
+        $onChunk = $options['on_chunk'] ?? null;
         $generator = $this->resolveContentGenerator($aiProvider);
 
         $jobData = [
@@ -50,8 +51,10 @@ class ContentPipelineOrchestrator
         ];
 
         $this->contentJobModel->insert($jobData);
+        $this->emitProgress($progress, 'job_created', 'Job konten berhasil dibuat.', ['job_id' => $jobId]);
 
         try {
+            $this->emitProgress($progress, 'preparing', 'Menyiapkan konteks dan opsi generate...');
             $this->contentJobModel->update($jobId, [
                 'source_title' => 'Prompt-based Content Request',
                 'source_description' => mb_substr($promptText, 0, 500),
@@ -65,6 +68,7 @@ class ContentPipelineOrchestrator
                 'transcript_text' => null,
             ]);
 
+            $this->emitProgress($progress, 'generating', 'Memanggil AI provider untuk menghasilkan artikel...');
             $generationResult = $generator->generate([
                 'prompt_text' => $promptText,
                 'title' => null,
@@ -75,6 +79,7 @@ class ContentPipelineOrchestrator
                 'tone' => $tone,
                 'word_target' => $wordTarget,
                 'ollama_model' => $ollamaModel,
+                'on_chunk' => is_callable($onChunk) ? $onChunk : null,
             ]);
 
             if (! ($generationResult['success'] ?? false)) {
@@ -86,6 +91,7 @@ class ContentPipelineOrchestrator
             }
 
             $article = is_array($generationResult['article'] ?? null) ? $generationResult['article'] : [];
+            $this->emitProgress($progress, 'saving_article', 'Menyimpan artikel hasil generate...');
 
             $this->generatedArticleModel->insert([
                 'id' => $this->uuidV4(),
@@ -116,6 +122,8 @@ class ContentPipelineOrchestrator
                 'updated_at' => date('Y-m-d H:i:s'),
             ]);
 
+            $this->emitProgress($progress, 'completed', 'Generate konten selesai.', ['job_id' => $jobId]);
+
             return [
                 'success' => true,
                 'job_id' => $jobId,
@@ -125,6 +133,8 @@ class ContentPipelineOrchestrator
                 'job_id' => $jobId,
                 'message' => $e->getMessage(),
             ]);
+
+            $this->emitProgress($progress, 'failed', 'Generate konten gagal karena kesalahan tak terduga.', ['job_id' => $jobId]);
 
             return $this->markFailed($jobId, 'UNEXPECTED_ERROR', 'Terjadi kesalahan tak terduga saat memproses job.');
         }
@@ -239,6 +249,15 @@ class ContentPipelineOrchestrator
             'error_code' => $errorCode,
             'error_message' => $errorMessage,
         ];
+    }
+
+    private function emitProgress(?callable $progress, string $stage, string $message, array $meta = []): void
+    {
+        if (! is_callable($progress)) {
+            return;
+        }
+
+        $progress($stage, $message, $meta);
     }
 
     private function resolveContentGenerator(string $provider): ContentGeneratorInterface

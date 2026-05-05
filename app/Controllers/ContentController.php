@@ -9,6 +9,7 @@ use App\Models\GeneratedImageModel;
 use App\Models\WordpressSubmissionModel;
 use App\Models\WordpressTaxonomyModel;
 use Config\ContentPipeline;
+use RuntimeException;
 
 class ContentController extends BaseController
 {
@@ -84,6 +85,122 @@ class ContentController extends BaseController
 
         return redirect()->to('/admin/content/detail/' . $result['job_id'])
             ->with('success', 'Job berhasil diproses. Silakan review hasil kontennya.');
+    }
+
+    public function generateStream()
+    {
+        $this->extendExecutionTime(300);
+
+        $this->response->setHeader('Content-Type', 'text/event-stream');
+        $this->response->setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        $this->response->setHeader('Pragma', 'no-cache');
+        $this->response->setHeader('X-Accel-Buffering', 'no');
+
+        while (ob_get_level() > 0) {
+            @ob_end_flush();
+        }
+
+        $send = function (string $event, array $data = []): void {
+            if (connection_aborted()) {
+                throw new RuntimeException('CLIENT_DISCONNECTED');
+            }
+
+            echo 'event: ' . $event . "\n";
+            echo 'data: ' . json_encode($data, JSON_UNESCAPED_UNICODE) . "\n\n";
+            @ob_flush();
+            flush();
+        };
+
+        $send('progress', ['message' => 'Memvalidasi input...']);
+
+        $rules = [
+            'prompt_text' => 'required|min_length[20]|max_length[5000]',
+            'article_style' => 'required|in_list[informative,tutorial,listicle,storytelling]',
+            'word_target' => 'required|in_list[800-1200,1200-1800,1800-2500]',
+            'tone' => 'required|in_list[santai-edukatif,profesional-formal,persuasive-marketing]',
+        ];
+
+        if (! $this->validate($rules)) {
+            $send('error', [
+                'message' => 'Input tidak valid.',
+                'errors' => $this->validator->getErrors(),
+            ]);
+            $send('done', ['success' => false]);
+
+            return;
+        }
+
+        $allowedProviders = ['openai', 'ollama'];
+        $aiProvider = $this->request->getPost('ai_provider');
+        $aiProvider = (is_string($aiProvider) && in_array($aiProvider, $allowedProviders, true)) ? $aiProvider : 'openai';
+
+        $ollamaModel = (string) ($this->request->getPost('ollama_model') ?? '');
+        $ollamaModel = preg_replace('/[^a-zA-Z0-9:\-\.]+/', '', $ollamaModel);
+
+        $promptText = trim((string) $this->request->getPost('prompt_text'));
+        $options = [
+            'article_style' => (string) $this->request->getPost('article_style'),
+            'word_target' => (string) $this->request->getPost('word_target'),
+            'tone' => (string) $this->request->getPost('tone'),
+            'ai_provider' => $aiProvider,
+            'ollama_model' => $ollamaModel,
+        ];
+
+        if ($aiProvider === 'ollama') {
+            $options['on_chunk'] = static function (string $chunk) use ($send): bool {
+                if (connection_aborted()) {
+                    return false;
+                }
+
+                $send('content_chunk', [
+                    'chunk' => $chunk,
+                ]);
+
+                return true;
+            };
+        }
+
+        $send('progress', ['message' => 'Memulai proses generate konten...']);
+
+        try {
+            $result = $this->orchestrator->runPromptGeneration(
+                $promptText,
+                auth()->id(),
+                $options,
+                static function (string $stage, string $message, array $meta = []) use ($send): void {
+                    $send('progress', [
+                        'stage' => $stage,
+                        'message' => $message,
+                        'meta' => $meta,
+                    ]);
+                }
+            );
+        } catch (RuntimeException $e) {
+            if ($e->getMessage() === 'CLIENT_DISCONNECTED') {
+                return;
+            }
+
+            throw $e;
+        }
+
+        if (! ($result['success'] ?? false)) {
+            $send('error', [
+                'message' => (string) ($result['error_message'] ?? 'Gagal generate konten.'),
+                'job_id' => (string) ($result['job_id'] ?? ''),
+            ]);
+            $send('done', ['success' => false]);
+
+            return;
+        }
+
+        $jobId = (string) ($result['job_id'] ?? '');
+        $send('complete', [
+            'success' => true,
+            'job_id' => $jobId,
+            'redirect_url' => base_url('admin/content/detail/' . $jobId),
+            'message' => 'Generate selesai. Mengarahkan ke halaman detail...',
+        ]);
+        $send('done', ['success' => true]);
     }
 
     public function history()
