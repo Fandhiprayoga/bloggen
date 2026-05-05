@@ -21,7 +21,7 @@ class OllamaContentGeneratorService implements ContentGeneratorInterface
     public function generate(array $payload): array
     {
         $baseUrl = $this->config->ollamaBaseUrl;
-        $httpTimeout = $this->resolveHttpTimeout();
+        $effectiveTimeout = $this->resolveHttpTimeout((string) ($payload['word_target'] ?? ''), 1);
         if ($baseUrl === '') {
             return [
                 'success' => false,
@@ -44,86 +44,122 @@ class OllamaContentGeneratorService implements ContentGeneratorInterface
         }
 
         try {
-            // Allow per-request model override via payload; fall back to config
-            $model = (string) ($payload['ollama_model'] ?? '');
-            if ($model === '') {
-                $model = $this->config->ollamaModel;
-            }
+            $attemptPayload = $payload;
+            $maxAttempts = 2;
 
-            $requestPayload = [
-                'model' => $model,
-                'stream' => true,
-                'format' => 'json',
-                'options' => [
-                    'temperature' => 0,
-                    'num_predict' => 4096,
-                ],
-                'messages' => [
-                    [
-                        'role' => 'system',
-                        'content' => 'Kamu adalah penulis konten SEO expert berbahasa Indonesia. Jawab HANYA dengan valid JSON tanpa teks tambahan di awal atau akhir.',
+            for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+                $attemptTimeout = $this->resolveHttpTimeout((string) ($attemptPayload['word_target'] ?? ''), $attempt);
+                $effectiveTimeout = $attemptTimeout;
+
+                // Allow per-request model override via payload; fall back to config
+                $model = (string) ($attemptPayload['ollama_model'] ?? '');
+                if ($model === '') {
+                    $model = $this->config->ollamaModel;
+                }
+
+                $requestPayload = [
+                    'model' => $model,
+                    'stream' => true,
+                    'format' => 'json',
+                    'options' => [
+                        'temperature' => 0,
+                        'num_predict' => $this->resolveNumPredict((string) ($attemptPayload['word_target'] ?? ''), $attempt),
                     ],
-                    [
-                        'role' => 'user',
-                        'content' => $this->buildPrompt($payload),
+                    'messages' => [
+                        [
+                            'role' => 'system',
+                            'content' => 'Kamu adalah penulis konten SEO expert berbahasa Indonesia. Jawab HANYA dengan valid JSON tanpa teks tambahan di awal atau akhir.',
+                        ],
+                        [
+                            'role' => 'user',
+                            'content' => $this->buildPrompt($attemptPayload),
+                        ],
                     ],
-                ],
-            ];
-
-            $onChunk = $payload['on_chunk'] ?? null;
-            $rawBody = '';
-            $statusCode = 0;
-
-            if (is_callable($onChunk)) {
-                $streamResult = $this->postStreamWithNativeCurl(
-                    rtrim($baseUrl, '/') . '/api/chat',
-                    $requestPayload,
-                    $httpTimeout,
-                    $onChunk,
-                );
-                $rawBody = $streamResult['body'];
-                $statusCode = $streamResult['status_code'];
-            } else {
-                $response = $this->http->post(rtrim($baseUrl, '/') . '/api/chat', [
-                    'timeout' => $httpTimeout,
-                    'connect_timeout' => min(10, $httpTimeout),
-                    'headers' => [
-                        'Content-Type' => 'application/json',
-                    ],
-                    'body' => json_encode($requestPayload, JSON_UNESCAPED_UNICODE),
-                ]);
-                $rawBody = (string) $response->getBody();
-                $statusCode = (int) $response->getStatusCode();
-            }
-
-            if ($statusCode < 200 || $statusCode >= 300) {
-                $snippet = mb_substr($rawBody, 0, 300);
-
-                return [
-                    'success' => false,
-                    'article' => null,
-                    'error_code' => 'OLLAMA_HTTP_ERROR',
-                    'error_message' => 'Ollama request gagal dengan status ' . $statusCode . '. ' . $snippet,
                 ];
-            }
 
-            $content = $this->extractResponseContent($rawBody);
+                $onChunk = $attemptPayload['on_chunk'] ?? null;
+                $rawBody = '';
+                $statusCode = 0;
 
-            if (! is_string($content) || trim($content) === '') {
-                return [
-                    'success' => false,
-                    'article' => null,
-                    'error_code' => 'OLLAMA_EMPTY_RESPONSE',
-                    'error_message' => 'Response Ollama kosong.',
-                ];
-            }
+                // Retry run disables chunk callbacks to avoid duplicate streaming output in UI.
+                if (is_callable($onChunk) && $attempt === 1) {
+                    $streamResult = $this->postStreamWithNativeCurl(
+                        rtrim($baseUrl, '/') . '/api/chat',
+                        $requestPayload,
+                        $attemptTimeout,
+                        $onChunk,
+                    );
+                    $rawBody = $streamResult['body'];
+                    $statusCode = $streamResult['status_code'];
+                } else {
+                    $response = $this->http->post(rtrim($baseUrl, '/') . '/api/chat', [
+                        'timeout' => $attemptTimeout,
+                        'connect_timeout' => min(10, $attemptTimeout),
+                        'headers' => [
+                            'Content-Type' => 'application/json',
+                        ],
+                        'body' => json_encode($requestPayload, JSON_UNESCAPED_UNICODE),
+                    ]);
+                    $rawBody = (string) $response->getBody();
+                    $statusCode = (int) $response->getStatusCode();
+                }
 
-            $articleData = $this->parseJsonPayload($content);
-            if ($articleData === null) {
+                if ($statusCode < 200 || $statusCode >= 300) {
+                    $snippet = mb_substr($rawBody, 0, 300);
+
+                    return [
+                        'success' => false,
+                        'article' => null,
+                        'error_code' => 'OLLAMA_HTTP_ERROR',
+                        'error_message' => 'Ollama request gagal dengan status ' . $statusCode . '. ' . $snippet,
+                    ];
+                }
+
+                $content = $this->extractResponseContent($rawBody);
+
+                if (! is_string($content) || trim($content) === '') {
+                    return [
+                        'success' => false,
+                        'article' => null,
+                        'error_code' => 'OLLAMA_EMPTY_RESPONSE',
+                        'error_message' => 'Response Ollama kosong.',
+                    ];
+                }
+
+                $articleData = $this->parseJsonPayload($content);
+                if ($articleData !== null) {
+                    return [
+                        'success' => true,
+                        'article' => $this->normalizeArticle($articleData, $attemptPayload),
+                        'error_code' => null,
+                        'error_message' => null,
+                    ];
+                }
+
+                $isTruncated = $this->looksLikeTruncatedJson($content);
+
                 $this->logger->error('Ollama JSON parsing failed', [
+                    'attempt' => $attempt,
+                    'max_attempts' => $maxAttempts,
+                    'is_truncated' => $isTruncated,
                     'raw_content' => mb_substr($content, 0, 500),
                     'content_length' => strlen($content),
                 ]);
+
+                if ($isTruncated && $attempt < $maxAttempts) {
+                    $attemptPayload = $this->buildRetryPayloadForTruncatedJson($attemptPayload);
+                    $attemptPayload['on_chunk'] = null;
+                    continue;
+                }
+
+                if ($isTruncated) {
+                    return [
+                        'success' => false,
+                        'article' => null,
+                        'error_code' => 'OLLAMA_TRUNCATED_JSON',
+                        'error_message' => 'Output Ollama terpotong sebelum JSON selesai meskipun sudah retry otomatis. Coba naikkan content.requestTimeout, gunakan model dengan context lebih besar, atau kurangi target kata.',
+                    ];
+                }
 
                 return [
                     'success' => false,
@@ -134,15 +170,15 @@ class OllamaContentGeneratorService implements ContentGeneratorInterface
             }
 
             return [
-                'success' => true,
-                'article' => $this->normalizeArticle($articleData, $payload),
-                'error_code' => null,
-                'error_message' => null,
+                'success' => false,
+                'article' => null,
+                'error_code' => 'OLLAMA_TRUNCATED_JSON',
+                'error_message' => 'Output Ollama terpotong sebelum JSON selesai.',
             ];
         } catch (Throwable $e) {
             $this->logger->error('Ollama generation failed.', [
                 'message' => $e->getMessage(),
-                'effective_timeout' => $httpTimeout,
+                'effective_timeout' => $effectiveTimeout,
                 'configured_timeout' => $this->config->requestTimeout,
             ]);
 
@@ -155,20 +191,30 @@ class OllamaContentGeneratorService implements ContentGeneratorInterface
         }
     }
 
-    private function resolveHttpTimeout(): int
+    private function resolveHttpTimeout(string $wordTarget = '', int $attempt = 1): int
     {
         $configuredTimeout = max(5, (int) $this->config->requestTimeout);
+        $recommendedTimeout = match ($wordTarget) {
+            '1800-2500' => 240,
+            '1200-1800' => 180,
+            default => 120,
+        };
+        if ($attempt > 1) {
+            $recommendedTimeout += 60;
+        }
+
+        $targetTimeout = max($configuredTimeout, $recommendedTimeout);
         $maxExecution = (int) ini_get('max_execution_time');
 
-        // max_execution_time = 0 means unlimited; keep configured timeout in that case.
+        // max_execution_time = 0 means unlimited; keep computed timeout in that case.
         if ($maxExecution <= 0) {
-            return $configuredTimeout;
+            return $targetTimeout;
         }
 
         // Keep a safety buffer so cURL timeout happens before PHP kills the request.
         $safeLimit = max(5, $maxExecution - 15);
 
-        return min($configuredTimeout, $safeLimit);
+        return min($targetTimeout, $safeLimit);
     }
 
     private function buildPrompt(array $payload): string
@@ -273,8 +319,11 @@ class OllamaContentGeneratorService implements ContentGeneratorInterface
             CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
             CURLOPT_POSTFIELDS => json_encode($requestPayload, JSON_UNESCAPED_UNICODE),
             CURLOPT_RETURNTRANSFER => false,
-            CURLOPT_TIMEOUT => $httpTimeout,
+            // Avoid hard total timeout while stream is active; rely on low-speed timeout for stalled transfers.
+            CURLOPT_TIMEOUT => 0,
             CURLOPT_CONNECTTIMEOUT => min(10, $httpTimeout),
+            CURLOPT_LOW_SPEED_LIMIT => 1,
+            CURLOPT_LOW_SPEED_TIME => max(30, min(120, $httpTimeout)),
             CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_WRITEFUNCTION => static function ($curlHandle, string $chunk) use (&$body, &$lineBuffer, $onChunk): int {
                 $body .= $chunk;
@@ -444,6 +493,93 @@ class OllamaContentGeneratorService implements ContentGeneratorInterface
         }
 
         return null;
+    }
+
+    private function looksLikeTruncatedJson(string $content): bool
+    {
+        $candidate = $this->stripCodeFence(trim($content));
+        if ($candidate === '') {
+            return false;
+        }
+
+        $start = strpos($candidate, '{');
+        if ($start === false) {
+            return false;
+        }
+
+        $candidate = substr($candidate, $start);
+
+        $depth = 0;
+        $inString = false;
+        $escaped = false;
+        $length = strlen($candidate);
+
+        for ($i = 0; $i < $length; $i++) {
+            $ch = $candidate[$i];
+
+            if ($inString) {
+                if ($escaped) {
+                    $escaped = false;
+                    continue;
+                }
+
+                if ($ch === '\\') {
+                    $escaped = true;
+                    continue;
+                }
+
+                if ($ch === '"') {
+                    $inString = false;
+                }
+
+                continue;
+            }
+
+            if ($ch === '"') {
+                $inString = true;
+                continue;
+            }
+
+            if ($ch === '{') {
+                $depth++;
+                continue;
+            }
+
+            if ($ch === '}') {
+                $depth--;
+            }
+        }
+
+        return $depth > 0 || $inString;
+    }
+
+    private function buildRetryPayloadForTruncatedJson(array $payload): array
+    {
+        $currentTarget = (string) ($payload['word_target'] ?? '1200-1800');
+        $retryTarget = match ($currentTarget) {
+            '1800-2500' => '1200-1800',
+            '1200-1800' => '800-1200',
+            default => '800-1200',
+        };
+
+        $payload['word_target'] = $retryTarget;
+
+        return $payload;
+    }
+
+    private function resolveNumPredict(string $wordTarget, int $attempt): int
+    {
+        $base = match ($wordTarget) {
+            '1800-2500' => 12288,
+            '1200-1800' => 8192,
+            default => 6144,
+        };
+
+        if ($attempt > 1) {
+            $base += 2048;
+        }
+
+        return min(16384, $base);
     }
 
     private function normalizeArticle(array $article, array $payload): array
