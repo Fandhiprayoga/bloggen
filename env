@@ -67,3 +67,25 @@
 #--------------------------------------------------------------------
 
 # logger.threshold = 4
+
+#--------------------------------------------------------------------
+# CONTENT PIPELINE (YouTube -> SEO Blog -> WordPress)
+#--------------------------------------------------------------------
+
+# content.openAIKey =
+# content.openAIModel = gpt-4o-mini
+# content.openAIImageModel = gpt-image-1
+# content.openAIBaseUrl = https://api.openai.com/v1
+
+# content.youtubeApiKey =
+
+# content.stockImageProvider = openai
+# content.stockImageApiKey =
+# content.stockImageBaseUrl = https://api.unsplash.com
+
+# content.wordpressBaseUrl = https://example.com
+# content.wordpressUsername =
+# content.wordpressAppPassword =
+
+# content.requestTimeout = 30
+# content.maxRetry = 2

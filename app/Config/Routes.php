@@ -67,5 +67,21 @@ $routes->group('', ['filter' => 'session'], static function ($routes) {
             $routes->post('test-email', 'SettingController::testEmail');
             $routes->post('reset', 'SettingController::resetDefaults');
         });
+
+        // Content Generator
+        $routes->group('content', static function ($routes) {
+            $routes->get('/', 'ContentController::index', ['filter' => 'permission:content.generate']);
+            $routes->post('generate', 'ContentController::generate', ['filter' => 'permission:content.generate']);
+            $routes->get('history', 'ContentController::history', ['filter' => 'permission:content.view_history']);
+            $routes->get('detail/(:segment)', 'ContentController::detail/$1', ['filter' => 'permission:content.view_history']);
+            $routes->post('publish/(:segment)', 'ContentController::publish/$1', ['filter' => 'permission:content.submit_wp']);
+            $routes->post('sync-taxonomies/(:segment)', 'ContentController::syncTaxonomies/$1', ['filter' => 'permission:content.submit_wp']);
+            $routes->post('create-category/(:segment)', 'ContentController::createCategory/$1', ['filter' => 'permission:content.submit_wp']);
+            $routes->post('create-tag/(:segment)', 'ContentController::createTag/$1', ['filter' => 'permission:content.submit_wp']);
+            $routes->post('regenerate-text/(:segment)', 'ContentController::regenerateText/$1', ['filter' => 'permission:content.generate']);
+            $routes->post('generate-image/(:segment)', 'ContentController::generateImage/$1', ['filter' => 'permission:content.generate']);
+            $routes->post('upload-image/(:segment)', 'ContentController::uploadImage/$1', ['filter' => 'permission:content.generate']);
+            $routes->get('check-ollama', 'ContentController::checkOllama', ['filter' => 'permission:content.generate']);
+        });
     });
 });

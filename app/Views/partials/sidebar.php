@@ -68,6 +68,25 @@ function isDropdownActive(array $paths): string {
         <a class="nav-link" href="<?= base_url('admin/settings') ?>"><i class="fas fa-cog"></i> <span>Pengaturan</span></a>
       </li>
       <?php endif; ?>
+
+      <!-- Content Generator -->
+      <?php if (activeGroupCan('content.generate') || activeGroupCan('content.view_history')): ?>
+      <li class="nav-item dropdown <?= isDropdownActive(['admin/content']) ?>">
+        <a href="#" class="nav-link has-dropdown"><i class="fas fa-pen-nib"></i> <span>Content Generator</span></a>
+        <ul class="dropdown-menu">
+          <?php if (activeGroupCan('content.generate')): ?>
+          <li class="<?= isMenuActive('admin/content') && !str_contains($currentUrl, 'history') && !str_contains($currentUrl, 'detail') ? 'active' : '' ?>">
+            <a class="nav-link" href="<?= base_url('admin/content') ?>">Generate Baru</a>
+          </li>
+          <?php endif; ?>
+          <?php if (activeGroupCan('content.view_history')): ?>
+          <li class="<?= isMenuActive('admin/content/history') || isMenuActive('admin/content/detail') ? 'active' : '' ?>">
+            <a class="nav-link" href="<?= base_url('admin/content/history') ?>">Riwayat Job</a>
+          </li>
+          <?php endif; ?>
+        </ul>
+      </li>
+      <?php endif; ?>
       <?php endif; ?>
 
       <!-- Profil -->

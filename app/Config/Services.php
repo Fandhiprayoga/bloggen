@@ -2,6 +2,19 @@
 
 namespace Config;
 
+use App\Libraries\Contracts\ContentGeneratorInterface;
+use App\Libraries\Contracts\FeaturedImageProviderInterface;
+use App\Libraries\Contracts\TranscriptProviderInterface;
+use App\Libraries\Contracts\WordPressPublisherInterface;
+use App\Libraries\Services\OllamaContentGeneratorService;
+use App\Libraries\Services\OpenAIContentGeneratorService;
+use App\Libraries\Services\ContentPipelineOrchestrator;
+use App\Libraries\Services\StockImageService;
+use App\Libraries\Services\WordPressPublisherService;
+use App\Libraries\Services\YoutubeTranscriptService;
+use App\Models\ContentJobModel;
+use App\Models\GeneratedArticleModel;
+use App\Models\GeneratedImageModel;
 use CodeIgniter\Config\BaseService;
 
 /**
@@ -19,14 +32,71 @@ use CodeIgniter\Config\BaseService;
  */
 class Services extends BaseService
 {
-    /*
-     * public static function example($getShared = true)
-     * {
-     *     if ($getShared) {
-     *         return static::getSharedInstance('example');
-     *     }
-     *
-     *     return new \CodeIgniter\Example();
-     * }
-     */
+    public static function transcriptProvider(bool $getShared = true): TranscriptProviderInterface
+    {
+        if ($getShared) {
+            return static::getSharedInstance('transcriptProvider');
+        }
+
+        return new YoutubeTranscriptService(
+            config('ContentPipeline'),
+            static::curlrequest(),
+            static::logger(),
+        );
+    }
+
+    public static function contentGenerator(bool $getShared = true): ContentGeneratorInterface
+    {
+        if ($getShared) {
+            return static::getSharedInstance('contentGenerator');
+        }
+
+        return new OpenAIContentGeneratorService(
+            config('ContentPipeline'),
+            static::curlrequest(),
+            static::logger(),
+        );
+    }
+
+    public static function featuredImageProvider(bool $getShared = true): FeaturedImageProviderInterface
+    {
+        if ($getShared) {
+            return static::getSharedInstance('featuredImageProvider');
+        }
+
+        return new StockImageService(
+            config('ContentPipeline'),
+            static::curlrequest(),
+            static::logger(),
+        );
+    }
+
+    public static function wordPressPublisher(bool $getShared = true): WordPressPublisherInterface
+    {
+        if ($getShared) {
+            return static::getSharedInstance('wordPressPublisher');
+        }
+
+        return new WordPressPublisherService(
+            config('ContentPipeline'),
+            static::curlrequest(),
+            static::logger(),
+        );
+    }
+
+    public static function contentPipelineOrchestrator(bool $getShared = true): ContentPipelineOrchestrator
+    {
+        if ($getShared) {
+            return static::getSharedInstance('contentPipelineOrchestrator');
+        }
+
+        return new ContentPipelineOrchestrator(
+            static::contentGenerator(),
+            static::featuredImageProvider(),
+            new ContentJobModel(),
+            new GeneratedArticleModel(),
+            new GeneratedImageModel(),
+            static::logger(),
+        );
+    }
 }

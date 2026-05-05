@@ -69,6 +69,13 @@ class AuthGroups extends ShieldAuthGroups
         // Reports
         'reports.view'        => 'Dapat melihat laporan',
         'reports.export'      => 'Dapat mengekspor laporan',
+
+        // Content generation
+        'content.generate'    => 'Dapat membuat konten dari YouTube',
+        'content.review'      => 'Dapat meninjau dan mengedit hasil konten',
+        'content.submit_wp'   => 'Dapat mengirim draft ke WordPress',
+        'content.view_history' => 'Dapat melihat riwayat generate konten',
+        'content.manage_settings' => 'Dapat mengelola pengaturan integrasi konten',
     ];
 
     /**
@@ -83,6 +90,7 @@ class AuthGroups extends ShieldAuthGroups
             'roles.*',
             'dashboard.*',
             'reports.*',
+            'content.*',
         ],
         'admin' => [
             'admin.access',
@@ -92,12 +100,16 @@ class AuthGroups extends ShieldAuthGroups
             'users.delete',
             'dashboard.*',
             'reports.*',
+            'content.*',
         ],
         'manager' => [
             'admin.access',
             'users.list',
             'dashboard.*',
             'reports.*',
+            'content.generate',
+            'content.review',
+            'content.view_history',
         ],
         'user' => [
             'dashboard.access',
