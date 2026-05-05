@@ -65,14 +65,13 @@ Dampaknya adalah throughput konten rendah dan konsistensi SEO tidak stabil.
 - Set category dan tag pada saat create post
 - API credentials disimpan via environment variables server
 
-### 5.2 Out of Scope (MVP)
-- Multi-site WordPress
-- Auto publish default (langsung publish)
-- Kuota harian usage
-- Fallback audio-to-text jika transcript tidak tersedia
-- Auto update post WordPress existing
-
-## 6. End-to-End User Flow
+### 5.3 Implementation Status (Current)
+- **Core Structure:** PRD and basic file structure are defined.
+- **YouTube Input:** Basic URL validation and transcript fetching (FR-1, FR-2, FR-4) are implemented/in progress.
+- **Content Generation:** LLM integration for article generation and SEO metadata is the primary focus.
+- **Image Handling:** Stock image API integration is planned/in progress.
+- **WordPress Integration:** Draft submission mechanism (FR-15) is defined but requires full API implementation.
+- **Next Steps:** Focus on robust error handling, content quality checks, and finalizing the WordPress API connection.
 1. User membuka halaman Generate Content
 2. User memasukkan URL YouTube
 3. Sistem validasi URL
