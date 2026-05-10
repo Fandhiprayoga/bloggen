@@ -80,6 +80,7 @@ $routes->group('', ['filter' => 'session'], static function ($routes) {
             $routes->post('create-category/(:segment)', 'ContentController::createCategory/$1', ['filter' => 'permission:content.submit_wp']);
             $routes->post('create-tag/(:segment)', 'ContentController::createTag/$1', ['filter' => 'permission:content.submit_wp']);
             $routes->post('regenerate-text/(:segment)', 'ContentController::regenerateText/$1', ['filter' => 'permission:content.generate']);
+            $routes->post('save-manual/(:segment)', 'ContentController::saveManual/$1', ['filter' => 'permission:content.generate']);
             $routes->post('generate-image/(:segment)', 'ContentController::generateImage/$1', ['filter' => 'permission:content.generate']);
             $routes->post('upload-image/(:segment)', 'ContentController::uploadImage/$1', ['filter' => 'permission:content.generate']);
             $routes->get('check-ollama', 'ContentController::checkOllama', ['filter' => 'permission:content.generate']);

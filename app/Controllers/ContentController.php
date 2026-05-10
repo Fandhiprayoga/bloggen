@@ -453,6 +453,46 @@ class ContentController extends BaseController
         return redirect()->to('/admin/content/detail/' . $jobId)->with('success', 'Featured image AI berhasil digenerate.');
     }
 
+    public function saveManual(string $jobId)
+    {
+        $job = $this->contentJobModel->find($jobId);
+        if (! $job) {
+            return redirect()->to('/admin/content/history')->with('error', 'Job tidak ditemukan.');
+        }
+
+        $articleTitle     = (string) $this->request->getPost('article_title');
+        $seoTitle         = (string) $this->request->getPost('seo_title');
+        $seoMeta          = (string) $this->request->getPost('seo_meta_description');
+        $articleBodyHtml  = (string) $this->request->getPost('article_body_html');
+
+        if (trim($articleTitle) === '' || trim($articleBodyHtml) === '') {
+            return redirect()->to('/admin/content/detail/' . $jobId)->with('error', 'Judul dan isi artikel wajib diisi.');
+        }
+
+        $existing = $this->generatedArticleModel->where('content_job_id', $jobId)->first();
+
+        $payload = [
+            'article_title'        => $articleTitle,
+            'seo_title'            => $seoTitle,
+            'seo_meta_description' => $seoMeta,
+            'article_body_html'    => $articleBodyHtml,
+            'article_body_markdown' => '',
+            'is_edited_manually'   => 1,
+            'updated_at'           => date('Y-m-d H:i:s'),
+        ];
+
+        if ($existing) {
+            $this->generatedArticleModel->where('content_job_id', $jobId)->set($payload)->update();
+        } else {
+            $payload['id']             = $this->uuidV4();
+            $payload['content_job_id'] = $jobId;
+            $payload['created_at']     = date('Y-m-d H:i:s');
+            $this->generatedArticleModel->insert($payload);
+        }
+
+        return redirect()->to('/admin/content/detail/' . $jobId)->with('success', 'Artikel berhasil disimpan secara manual.');
+    }
+
     public function uploadImage(string $jobId)
     {
         $job = $this->contentJobModel->find($jobId);

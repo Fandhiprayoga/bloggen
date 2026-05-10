@@ -219,6 +219,43 @@
   </div>
 
   <div class="col-lg-7">
+    <?php if (activeGroupCan('content.generate')): ?>
+    <div class="card">
+      <div class="card-header">
+        <h4 class="mb-0">Salin Artikel Manual</h4>
+      </div>
+      <div class="card-body">
+        <form action="<?= base_url('admin/content/save-manual/' . ($job['id'] ?? '')) ?>" method="post">
+          <?= csrf_field() ?>
+          <div class="form-group">
+            <label for="manual_article_title">Judul Artikel <span class="text-danger">*</span></label>
+            <input type="text" id="manual_article_title" name="article_title" class="form-control"
+              value="<?= esc((string) ($article['article_title'] ?? '')) ?>" required>
+          </div>
+          <div class="form-group">
+            <label for="manual_seo_title">SEO Title</label>
+            <input type="text" id="manual_seo_title" name="seo_title" class="form-control"
+              value="<?= esc((string) ($article['seo_title'] ?? '')) ?>">
+          </div>
+          <div class="form-group">
+            <label for="manual_seo_meta">Meta Description</label>
+            <textarea id="manual_seo_meta" name="seo_meta_description" class="form-control" rows="2"><?= esc((string) ($article['seo_meta_description'] ?? '')) ?></textarea>
+          </div>
+          <div class="form-group">
+            <label for="manual_article_body">Isi Artikel (HTML) <span class="text-danger">*</span></label>
+            <textarea id="manual_article_body" name="article_body_html" class="form-control" rows="12"
+              placeholder="Tempel isi artikel dalam format HTML di sini..." required><?= esc((string) ($article['article_body_html'] ?? '')) ?></textarea>
+            <small class="form-text text-muted">Mendukung HTML. Jika artikel sudah ada, isian ini akan menimpa konten sebelumnya.</small>
+          </div>
+          <button type="submit" class="btn btn-primary btn-block"
+            onclick="return confirm('Simpan artikel manual ini? Konten artikel yang ada akan ditimpa.')">
+            <i class="fas fa-save mr-1"></i> Simpan Artikel Manual
+          </button>
+        </form>
+      </div>
+    </div>
+    <?php endif; ?>
+
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
         <h4 class="mb-0">Hasil Artikel</h4>
