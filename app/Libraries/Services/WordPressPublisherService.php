@@ -17,6 +17,87 @@ class WordPressPublisherService implements WordPressPublisherInterface
     ) {
     }
 
+    public function checkConnection(): array
+    {
+        if ($this->config->wordpressBaseUrl === '') {
+            return [
+                'success' => false,
+                'data' => null,
+                'error_code' => 'WP_CREDENTIALS_MISSING',
+                'error_message' => 'WordPress Base URL belum diatur di env.',
+            ];
+        }
+
+        $missing = [];
+        if ($this->config->wordpressUsername === '') {
+            $missing[] = 'WORDPRESS_USERNAME';
+        }
+        if ($this->config->wordpressAppPassword === '') {
+            $missing[] = 'WORDPRESS_APP_PASSWORD';
+        }
+
+        if ($missing !== []) {
+            return [
+                'success' => false,
+                'data' => null,
+                'error_code' => 'WP_CREDENTIALS_MISSING',
+                'error_message' => 'Kredensial WordPress belum lengkap. Env yang belum diatur: ' . implode(', ', $missing),
+            ];
+        }
+
+        try {
+            $endpoint = rtrim($this->config->wordpressBaseUrl, '/') . '/wp-json/wp/v2/users/me';
+
+            $response = $this->http->get($endpoint, [
+                'timeout' => 10,
+                'headers' => [
+                    'Authorization' => 'Basic ' . base64_encode($this->config->wordpressUsername . ':' . $this->config->wordpressAppPassword),
+                ],
+            ]);
+
+            if ($response->getStatusCode() === 401 || $response->getStatusCode() === 403) {
+                return [
+                    'success' => false,
+                    'data' => null,
+                    'error_code' => 'WP_AUTH_FAILED',
+                    'error_message' => 'Autentikasi WordPress gagal (status ' . $response->getStatusCode() . '). Periksa username dan Application Password.',
+                ];
+            }
+
+            if ($response->getStatusCode() < 200 || $response->getStatusCode() >= 300) {
+                $body = mb_substr((string) $response->getBody(), 0, 300);
+                return [
+                    'success' => false,
+                    'data' => null,
+                    'error_code' => 'WP_HTTP_ERROR',
+                    'error_message' => 'WordPress merespons dengan status ' . $response->getStatusCode() . '. Detail: ' . $body,
+                ];
+            }
+
+            $decoded = json_decode($response->getBody(), true);
+            $username = is_array($decoded) ? (string) ($decoded['name'] ?? $decoded['slug'] ?? '-') : '-';
+            $roles = (is_array($decoded) && is_array($decoded['roles'] ?? null)) ? $decoded['roles'] : [];
+
+            return [
+                'success' => true,
+                'data' => [
+                    'wp_user' => $username,
+                    'wp_roles' => $roles,
+                    'wp_url' => (string) $this->config->wordpressBaseUrl,
+                ],
+                'error_code' => null,
+                'error_message' => null,
+            ];
+        } catch (Throwable $e) {
+            return [
+                'success' => false,
+                'data' => null,
+                'error_code' => 'WP_CONNECTION_FAILED',
+                'error_message' => 'Tidak dapat terhubung ke WordPress (' . $this->config->wordpressBaseUrl . '): ' . $e->getMessage(),
+            ];
+        }
+    }
+
     public function createDraft(array $payload): array
     {
         if ($this->config->wordpressBaseUrl === '' || $this->config->wordpressUsername === '' || $this->config->wordpressAppPassword === '') {
@@ -73,11 +154,23 @@ class WordPressPublisherService implements WordPressPublisherInterface
             ]);
 
             if ($response->getStatusCode() < 200 || $response->getStatusCode() >= 300) {
+                $responseBody = $response->getBody();
+                $errorDetail = '';
+                $decodedError = json_decode($responseBody, true);
+                if (is_array($decodedError) && isset($decodedError['message'])) {
+                    $errorDetail = (string) $decodedError['message'];
+                    if (isset($decodedError['code'])) {
+                        $errorDetail .= ' [code: ' . (string) $decodedError['code'] . ']';
+                    }
+                } else {
+                    $errorDetail = mb_substr($responseBody, 0, 500);
+                }
+
                 return [
                     'success' => false,
                     'data' => null,
                     'error_code' => 'WP_POST_CREATE_HTTP_ERROR',
-                    'error_message' => 'Gagal membuat draft WordPress. Status ' . $response->getStatusCode() . '.',
+                    'error_message' => 'Gagal membuat draft WordPress. Status ' . $response->getStatusCode() . '. Detail: ' . $errorDetail,
                 ];
             }
 
@@ -105,13 +198,15 @@ class WordPressPublisherService implements WordPressPublisherInterface
         } catch (Throwable $e) {
             $this->logger->error('WordPress publish failed.', [
                 'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
             ]);
 
             return [
                 'success' => false,
                 'data' => null,
                 'error_code' => 'WP_REQUEST_EXCEPTION',
-                'error_message' => 'Terjadi error saat publish draft ke WordPress.',
+                'error_message' => 'Terjadi error saat publish draft ke WordPress: ' . $e->getMessage(),
             ];
         }
     }

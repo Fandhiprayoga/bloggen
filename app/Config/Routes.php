@@ -84,6 +84,7 @@ $routes->group('', ['filter' => 'session'], static function ($routes) {
             $routes->post('generate-image/(:segment)', 'ContentController::generateImage/$1', ['filter' => 'permission:content.generate']);
             $routes->post('upload-image/(:segment)', 'ContentController::uploadImage/$1', ['filter' => 'permission:content.generate']);
             $routes->get('check-ollama', 'ContentController::checkOllama', ['filter' => 'permission:content.generate']);
+            $routes->get('check-wordpress', 'ContentController::checkWordPress', ['filter' => 'permission:content.submit_wp']);
         });
     });
 });

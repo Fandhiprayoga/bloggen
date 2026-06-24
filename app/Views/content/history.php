@@ -8,6 +8,11 @@
       <div class="card-header">
         <h4>Riwayat Generate Konten</h4>
         <div class="card-header-action">
+          <?php if (activeGroupCan('content.submit_wp')): ?>
+          <button type="button" class="btn btn-outline-success btn-sm mr-2" id="btnCheckWp">
+            <i class="fas fa-plug mr-1"></i> Check WP Koneksi
+          </button>
+          <?php endif; ?>
           <?php if (activeGroupCan('content.generate')): ?>
           <a href="<?= base_url('admin/content') ?>" class="btn btn-primary btn-sm">
             <i class="fas fa-plus"></i> Job Baru
@@ -73,5 +78,67 @@
         </div>
       </div>
     </div>
+    <div id="wpConnectionResult" class="card d-none mt-3">
+      <div class="card-header">
+        <h4 class="mb-0" id="wpConnectionTitle">WordPress Connection</h4>
+      </div>
+      <div class="card-body">
+        <div id="wpConnectionBody"></div>
+      </div>
+    </div>
   </div>
 </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  const btn = document.getElementById('btnCheckWp');
+  if (!btn) return;
+  const resultCard = document.getElementById('wpConnectionResult');
+  const resultBody = document.getElementById('wpConnectionBody');
+  const resultTitle = document.getElementById('wpConnectionTitle');
+
+  btn.addEventListener('click', function () {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Checking...';
+    resultCard.classList.remove('d-none');
+    resultBody.innerHTML = '<span class="text-muted">Menghubungi WordPress API...</span>';
+    resultTitle.textContent = 'WordPress Connection';
+
+    fetch('<?= base_url('admin/content/check-wordpress') ?>')
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (data.ok) {
+          resultTitle.innerHTML = '<i class="fas fa-check-circle text-success mr-1"></i> WordPress Terhubung';
+          resultBody.innerHTML =
+            '<div class="alert alert-success mb-0">' +
+            '<strong>' + escHtml(data.message) + '</strong>' +
+            (data.data && data.data.wp_url ? '<br><small>URL: ' + escHtml(data.data.wp_url) + '</small>' : '') +
+            '</div>';
+        } else {
+          resultTitle.innerHTML = '<i class="fas fa-times-circle text-danger mr-1"></i> WordPress Gagal Koneksi';
+          var code = data.error_code ? '<code>' + escHtml(data.error_code) + '</code> — ' : '';
+          resultBody.innerHTML =
+            '<div class="alert alert-danger mb-0">' +
+            '<strong>Error:</strong> ' + code + escHtml(data.message) +
+            '</div>';
+        }
+      })
+      .catch(function (err) {
+        resultTitle.innerHTML = '<i class="fas fa-times-circle text-danger mr-1"></i> Error';
+        resultBody.innerHTML =
+          '<div class="alert alert-danger mb-0">Request gagal: ' + escHtml(err.message) + '</div>';
+      })
+      .finally(function () {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-plug mr-1"></i> Check WP Koneksi';
+      });
+  });
+
+  function escHtml(str) {
+    if (!str) return '';
+    var div = document.createElement('div');
+    div.appendChild(document.createTextNode(str));
+    return div.innerHTML;
+  }
+});
+</script>

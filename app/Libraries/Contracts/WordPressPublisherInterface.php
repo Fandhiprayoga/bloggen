@@ -57,4 +57,15 @@ interface WordPressPublisherInterface
      * - error_message: ?string
      */
     public function createTag(array $payload): array;
+
+    /**
+     * Check connectivity to WordPress REST API.
+     *
+     * Return shape:
+     * - success: bool
+     * - data: ?array
+     * - error_code: ?string
+     * - error_message: ?string
+     */
+    public function checkConnection(): array;
 }

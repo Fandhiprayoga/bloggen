@@ -286,7 +286,17 @@ class ContentController extends BaseController
             ]);
 
             if (! ($mediaResult['success'] ?? false)) {
-                return redirect()->to('/admin/content/detail/' . $jobId)->with('error', 'Gagal upload featured image ke WordPress: ' . (string) ($mediaResult['error_message'] ?? '-'));
+                $mediaErrorCode = (string) ($mediaResult['error_code'] ?? 'UNKNOWN');
+                $mediaErrorMsg = (string) ($mediaResult['error_message'] ?? '-');
+
+                $this->contentJobModel->update($jobId, [
+                    'status' => 'wp_publish_failed',
+                    'error_code' => $mediaErrorCode,
+                    'error_message' => $mediaErrorMsg,
+                    'updated_at' => date('Y-m-d H:i:s'),
+                ]);
+
+                return redirect()->to('/admin/content/detail/' . $jobId)->with('error', '[' . $mediaErrorCode . '] Gagal upload featured image ke WordPress: ' . $mediaErrorMsg);
             }
 
             $mediaData = is_array($mediaResult['data'] ?? null) ? $mediaResult['data'] : [];
@@ -313,7 +323,17 @@ class ContentController extends BaseController
         $result = $publisher->createDraft($payload);
 
         if (! ($result['success'] ?? false)) {
-            return redirect()->to('/admin/content/detail/' . $jobId)->with('error', (string) ($result['error_message'] ?? 'Gagal publish draft ke WordPress.'));
+            $errorCode = (string) ($result['error_code'] ?? 'UNKNOWN');
+            $errorMessage = (string) ($result['error_message'] ?? 'Gagal publish draft ke WordPress.');
+
+            $this->contentJobModel->update($jobId, [
+                'status' => 'wp_publish_failed',
+                'error_code' => $errorCode,
+                'error_message' => $errorMessage,
+                'updated_at' => date('Y-m-d H:i:s'),
+            ]);
+
+            return redirect()->to('/admin/content/detail/' . $jobId)->with('error', '[' . $errorCode . '] ' . $errorMessage);
         }
 
         $config = config('ContentPipeline');
@@ -345,6 +365,21 @@ class ContentController extends BaseController
 
         $statusLabel = $postStatus === 'publish' ? 'dipublikasikan' : 'disimpan sebagai draft';
         return redirect()->to('/admin/content/detail/' . $jobId)->with('success', 'Berhasil! Post WordPress ' . $statusLabel . '. Post ID: ' . (string) ($data['wp_post_id'] ?? '-'));
+    }
+
+    public function checkWordPress()
+    {
+        $publisher = service('wordPressPublisher');
+        $result = $publisher->checkConnection();
+
+        return $this->response->setJSON([
+            'ok' => (bool) ($result['success'] ?? false),
+            'data' => $result['data'] ?? null,
+            'error_code' => $result['error_code'] ?? null,
+            'message' => ($result['success'] ?? false)
+                ? 'Terhubung ke WordPress sebagai "' . ($result['data']['wp_user'] ?? '-') . '" (' . implode(', ', $result['data']['wp_roles'] ?? []) . ')'
+                : (string) ($result['error_message'] ?? 'Gagal koneksi ke WordPress.'),
+        ]);
     }
 
     public function checkOllama()
