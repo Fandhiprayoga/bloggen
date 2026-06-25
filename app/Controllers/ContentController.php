@@ -461,8 +461,11 @@ class ContentController extends BaseController
         $article = $this->generatedArticleModel->where('content_job_id', $jobId)->first();
         $query = (string) ($article['primary_keyword'] ?? $article['article_title'] ?? $job['prompt_text'] ?? 'blog featured image');
 
+        $imageFormat = (string) ($this->request->getPost('image_format') ?? '');
+        $imageFormat = in_array($imageFormat, ['webp', 'png', 'jpeg'], true) ? $imageFormat : 'webp';
+
         $imageProvider = service('featuredImageProvider');
-        $result = $imageProvider->search($query, 1);
+        $result = $imageProvider->search($query, 1, $imageFormat);
 
         if (! ($result['success'] ?? false) || empty($result['images'])) {
             return redirect()->to('/admin/content/detail/' . $jobId)->with('error', 'Gagal generate gambar AI: ' . (string) ($result['error_message'] ?? '-'));

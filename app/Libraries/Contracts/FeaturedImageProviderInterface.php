@@ -11,5 +11,5 @@ interface FeaturedImageProviderInterface
      * - error_code: ?string
      * - error_message: ?string
      */
-    public function search(string $query, int $limit = 5): array;
+    public function search(string $query, int $limit = 5, ?string $format = null): array;
 }

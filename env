@@ -75,6 +75,7 @@
 # content.openAIKey =
 # content.openAIModel = gpt-4o-mini
 # content.openAIImageModel = gpt-image-1
+# content.openAIImageFormat = webp
 # content.openAIBaseUrl = https://api.openai.com/v1
 
 # content.youtubeApiKey =

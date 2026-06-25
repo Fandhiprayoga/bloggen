@@ -17,7 +17,7 @@ class StockImageService implements FeaturedImageProviderInterface
     ) {
     }
 
-    public function search(string $query, int $limit = 5): array
+    public function search(string $query, int $limit = 5, ?string $format = null): array
     {
         if (trim($query) === '') {
             return [
@@ -31,7 +31,7 @@ class StockImageService implements FeaturedImageProviderInterface
         $provider = strtolower($this->config->stockImageProvider);
 
         if ($provider === 'openai') {
-            return $this->searchWithOpenAI($query);
+            return $this->searchWithOpenAI($query, $format);
         }
 
         if ($this->config->stockImageApiKey === '') {
@@ -126,7 +126,7 @@ class StockImageService implements FeaturedImageProviderInterface
         }
     }
 
-    private function searchWithOpenAI(string $query): array
+    private function searchWithOpenAI(string $query, ?string $overrideFormat = null): array
     {
         if ($this->config->openAIKey === '') {
             return [
@@ -137,12 +137,18 @@ class StockImageService implements FeaturedImageProviderInterface
             ];
         }
 
+        $format = $overrideFormat ?? strtolower(trim((string) $this->config->openAIImageFormat));
+        if (! in_array($format, ['png', 'jpeg', 'webp'], true)) {
+            $format = 'webp';
+        }
+
         try {
             $payload = [
                 'model' => $this->config->openAIImageModel,
                 'prompt' => 'Buat featured image blog profesional untuk topik: ' . $query . '. Tanpa teks besar di gambar.',
                 'size' => '1024x1024',
                 'n' => 1,
+                'output_format' => $format,
             ];
 
             $response = $this->http->post(rtrim($this->config->openAIBaseUrl, '/') . '/images/generations', [
@@ -191,7 +197,7 @@ class StockImageService implements FeaturedImageProviderInterface
                 mkdir($uploadDir, 0755, true);
             }
 
-            $filename = 'feature_' . date('Ymd_His') . '_' . substr(md5($query), 0, 8) . '.png';
+            $filename = 'feature_' . date('Ymd_His') . '_' . substr(md5($query), 0, 8) . '.' . $format;
             $fullPath = $uploadDir . '/' . $filename;
             file_put_contents($fullPath, $binary);
 

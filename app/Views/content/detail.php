@@ -195,6 +195,14 @@
         <!-- AI Generate -->
         <form action="<?= base_url('admin/content/generate-image/' . ($job['id'] ?? '')) ?>" method="post" class="mb-3">
           <?= csrf_field() ?>
+          <div class="form-group">
+            <label for="image_format">Format Output</label>
+            <select class="form-control" id="image_format" name="image_format">
+              <option value="webp" selected>WebP &mdash; lebih kecil, modern</option>
+              <option value="png">PNG &mdash; lossless</option>
+              <option value="jpeg">JPEG &mdash; lossy, kompatibel lama</option>
+            </select>
+          </div>
           <button type="submit" class="btn btn-outline-primary btn-block">
             <i class="fas fa-robot mr-1"></i> Generate Featured Image dengan AI
           </button>

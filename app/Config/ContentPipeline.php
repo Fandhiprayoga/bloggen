@@ -9,6 +9,7 @@ class ContentPipeline extends BaseConfig
     public string $openAIKey = '';
     public string $openAIModel = 'gpt-4o-mini';
     public string $openAIImageModel = 'gpt-image-1';
+    public string $openAIImageFormat = 'webp';
     public string $openAIBaseUrl = 'https://api.openai.com/v1';
 
     public string $ollamaBaseUrl = 'http://localhost:11434';
@@ -34,6 +35,7 @@ class ContentPipeline extends BaseConfig
         $this->openAIKey = (string) env('content.openAIKey', $this->openAIKey);
         $this->openAIModel = (string) env('content.openAIModel', $this->openAIModel);
         $this->openAIImageModel = (string) env('content.openAIImageModel', $this->openAIImageModel);
+        $this->openAIImageFormat = (string) env('content.openAIImageFormat', $this->openAIImageFormat);
         $this->openAIBaseUrl = (string) env('content.openAIBaseUrl', $this->openAIBaseUrl);
 
         $this->ollamaBaseUrl = (string) env('content.ollamaBaseUrl', $this->ollamaBaseUrl);
